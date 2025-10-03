@@ -44,6 +44,7 @@ body {
   transition: grid-template-columns 200ms ease;
 }
 
+/* When "closed", collapse the sidebar column too */
 .qo-shell.sidebar-closed {
   grid-template-columns: 0 1fr;
 }
@@ -57,11 +58,24 @@ body {
   grid-template-rows: auto 1fr auto;
   gap: var(--sidebar-gap);
   overflow: hidden;
-  transform: translateX(0);
+
+  /* Off-canvas by default; slide in when .open */
+  transform: translateX(-100%);
+  will-change: transform;
   transition: transform 200ms ease;
+  pointer-events: none; /* prevent catching clicks when hidden */
 }
 
-.qo-sidebar.open { transform: translateX(0); }
+/* Show the sidebar when open */
+.qo-sidebar.open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+/* If the whole shell is "closed", remove the stray border */
+.qo-shell.sidebar-closed .qo-sidebar {
+  border-right: 0;
+}
 
 /* Sidebar header */
 .qo-sidebar__header {
@@ -146,6 +160,8 @@ body {
 /* Main column */
 .qo-main {
   display: grid;
+  min-height: 0;     
+  overflow: hidden;  
   grid-template-rows: auto 1fr auto;
   min-width: 0; /* enable flex shrink */
 }
@@ -194,6 +210,7 @@ body {
 /* Chat Area */
 .qo-chat {
   overflow-y: auto;
+
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -296,11 +313,18 @@ body {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Responsive: collapse sidebar on narrow screens */
+/* Responsive: collapse sidebar on narrow screens (off-canvas slide) */
 @media (max-width: 920px) {
   .qo-shell {
     grid-template-columns: 0 1fr;
   }
-  .qo-sidebar { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-w); z-index: 3; }
-  .qo-sidebar.open { box-shadow: 0 12px 28px rgba(0,0,0,0.12); }
+  .qo-sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--sidebar-w);
+    z-index: 3;
+  }
+  .qo-sidebar.open {
+    box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+  }
 }
