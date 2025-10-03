@@ -1,5 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import "./styles.css";
+/** ---------- LLM CONFIG (placeholders) ---------- */
+// Point this at your OpenAI-compatible endpoint (must expose /v1/chat/completions)
+const LLM_BASE_URL = "local"; 
+const LLM_API_KEY = "";
+const LLM_MODEL = ""; //
+
+
+// Optional: cap how many past turns you send to the model
+const MAX_TURNS = 24; // user+assistant messages counted individually
 
 /** ---------- Utilities ---------- */
 const LS_KEY = "quiet-observer:sessions";
@@ -8,7 +17,7 @@ const LS_KEY = "quiet-observer:sessions";
 function makeMsg(role, content) {
   return {
     id: crypto.randomUUID(),
-    role,
+    role, // "user" | "bot"
     content,
     timestamp: new Date().toISOString(),
   };
@@ -24,6 +33,55 @@ function makeSession(title = "Nouvelle discussion") {
     ],
     updatedAt: Date.now(),
   };
+}
+
+/** ---------- OpenAI-compatible Chat Call ---------- */
+async function chatWithLLM({ history, abortSignal }) {
+  // history = [{role: "user" | "bot", content: string}, ...]
+  // Convert app roles to OpenAI roles
+  const mapped = history.map((m) => ({
+    role: m.role === "bot" ? "assistant" : "user",
+    content: m.content,
+  }));
+
+  const system = {
+    role: "system",
+    content:
+      "You are Quiet Observer, a concise, friendly assistant. Keep answers short and helpful.",
+  };
+
+  const trimmed = mapped.slice(-MAX_TURNS);
+
+  const payload = {
+    model: LLM_MODEL,
+    messages: [system, ...trimmed],
+    temperature: 0.6,
+    // max_tokens: 512,
+    // top_p: 1,
+    // stream: false,
+  };
+
+  const res = await fetch(`${LLM_BASE_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${LLM_API_KEY}`,
+    },
+    body: JSON.stringify(payload),
+    signal: abortSignal,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`LLM error ${res.status}: ${text || res.statusText}`);
+  }
+
+  const data = await res.json();
+  const content =
+    data?.choices?.[0]?.message?.content ??
+    data?.choices?.[0]?.delta?.content ??
+    "";
+  return (content || "").trim();
 }
 
 /** ---------- App ---------- */
@@ -45,7 +103,26 @@ export default function App() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true); // retractable
+
+  // Conversation scroll helpers
   const listRef = useRef(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (!listRef.current) return;
+    listRef.current.scrollTo({
+      top: listRef.current.scrollHeight,
+      behavior: smooth ? "smooth" : "auto",
+    });
+  }, []);
+  const handleScroll = useCallback(() => {
+    if (!listRef.current) return;
+    const el = listRef.current;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAtBottom(distance < 40); // “near bottom” threshold
+  }, []);
+
+  // Keep a ref to abort in-flight LLM requests if user sends another message
+  const abortRef = useRef(null);
 
   const current = useMemo(
     () => sessions.find((s) => s.id === currentId) ?? sessions[0],
@@ -57,26 +134,12 @@ export default function App() {
     localStorage.setItem(LS_KEY, JSON.stringify(sessions));
   }, [sessions]);
 
-  // Auto-scroll on new messages
+  // Auto-scroll on new messages only if user is near the bottom
   useEffect(() => {
-    if (!listRef.current) return;
-    listRef.current.scrollTo({
-      top: listRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [current?.messages.length]);
-
-  // ---- Chat actions
-  const fakeBotReply = (userText) => {
-    const replies = [
-      "Bien reçu. Tu veux que je peaufine ?",
-      "On garde ça clair et posé.",
-      "OK. Simplicité, constance, élégance.",
-      "C’est noté. J’avance avec douceur.",
-    ];
-    const pick = replies[Math.floor(Math.random() * replies.length)];
-    return pick;
-  };
+    if (atBottom) {
+      scrollToBottom(true);
+    }
+  }, [current?.messages.length, atBottom, scrollToBottom]);
 
   const patchSession = (id, updater) => {
     setSessions((arr) =>
@@ -88,7 +151,15 @@ export default function App() {
     const trimmed = input.trim();
     if (!trimmed || isSending) return;
 
-    // push user message
+    // Cancel any previous request in flight
+    if (abortRef.current) {
+      try {
+        abortRef.current.abort();
+      } catch {}
+    }
+    abortRef.current = new AbortController();
+
+    // Push user message
     patchSession(current.id, (s) => {
       s.messages = [...s.messages, makeMsg("user", trimmed)];
       s.updatedAt = Date.now();
@@ -97,14 +168,36 @@ export default function App() {
     setInput("");
     setIsSending(true);
 
-    // Simulate latency + bot reply
-    await new Promise((r) => setTimeout(r, 450));
-    patchSession(current.id, (s) => {
-      s.messages = [...s.messages, makeMsg("bot", fakeBotReply(trimmed))];
-      s.updatedAt = Date.now();
-      return s;
-    });
-    setIsSending(false);
+    try {
+      // Build the history (include the new user message we just added)
+      const historyForLLM = [...current.messages, makeMsg("user", trimmed)];
+
+      const reply = await chatWithLLM({
+        history: historyForLLM,
+        abortSignal: abortRef.current.signal,
+      });
+
+      patchSession(current.id, (s) => {
+        s.messages = [...s.messages, makeMsg("bot", reply || "…")];
+        s.updatedAt = Date.now();
+        return s;
+      });
+    } catch (err) {
+      console.error(err);
+      patchSession(current.id, (s) => {
+        s.messages = [
+          ...s.messages,
+          makeMsg(
+            "bot",
+            "⚠️ Je n’ai pas pu contacter le modèle. Vérifie l’endpoint, le token, la CORS policy et les logs serveur."
+          ),
+        ];
+        s.updatedAt = Date.now();
+        return s;
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const onKeyDown = (e) => {
@@ -119,6 +212,8 @@ export default function App() {
     const session = makeSession("Nouvelle discussion");
     setSessions((arr) => [session, ...arr]);
     setCurrentId(session.id);
+    // When opening a new chat, ensure we're at bottom (empty thread)
+    setTimeout(() => scrollToBottom(false), 0);
   };
 
   const selectChat = (id) => {
@@ -127,6 +222,11 @@ export default function App() {
     if (window.matchMedia("(max-width: 920px)").matches) {
       setSidebarOpen(false);
     }
+    // Reset scroll-bottom tracking on chat switch
+    setTimeout(() => {
+      setAtBottom(true);
+      scrollToBottom(false);
+    }, 0);
   };
 
   const renameChat = (id, title) => {
@@ -140,9 +240,9 @@ export default function App() {
   const deleteChat = (id) => {
     setSessions((arr) => {
       const filtered = arr.filter((s) => s.id !== id);
-      // ensure at least one session exists
-      const final = filtered.length ? filtered : [makeSession("Nouvelle discussion")];
-      // keep selection sane
+      const final = filtered.length
+        ? filtered
+        : [makeSession("Nouvelle discussion")];
       if (!final.find((s) => s.id === currentId)) {
         setCurrentId(final[0].id);
       }
@@ -151,7 +251,9 @@ export default function App() {
   };
 
   return (
-    <div className={`qo-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}`}>
+    <div
+      className={`qo-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}`}
+    >
       {/* Sidebar / Historique */}
       <aside
         className={`qo-sidebar ${sidebarOpen ? "open" : ""}`}
@@ -169,7 +271,11 @@ export default function App() {
           </button>
         </div>
 
-        <nav className="qo-sidebar__list" role="listbox" aria-activedescendant={currentId}>
+        <nav
+          className="qo-sidebar__list"
+          role="listbox"
+          aria-activedescendant={currentId}
+        >
           {sessions
             .slice() // don’t mutate
             .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -202,21 +308,47 @@ export default function App() {
             <ChevronIcon open={sidebarOpen} />
           </button>
           <div className="qo-header__title">Talk with your logs</div>
-          <div className="qo-header__subtitle">historique • élégant • rétractable</div>
+          <div className="qo-header__subtitle">
+            historique • élégant • rétractable
+          </div>
         </header>
 
-        {/* Chat area */}
+        {/* Chat area (scrollable) */}
         <main
           className="qo-chat"
           ref={listRef}
+          onScroll={handleScroll}
           aria-live="polite"
           aria-label="Chat messages"
           role="log"
         >
+          {/* Optional "load older" placeholder shown when scrolled up (wire pagination later) */}
+          {!atBottom && (
+            <button
+              className="qo-loadmore"
+              onClick={() => {
+                // TODO: fetch older messages & prepend
+              }}
+            >
+              ↑ Charger plus d’anciens messages
+            </button>
+          )}
+
           {current?.messages.map((msg) => (
             <MessageBubble key={msg.id} msg={msg} />
           ))}
           {isSending && <TypingIndicator />}
+
+          {/* Jump-to-latest button appears when not at bottom */}
+          {!atBottom && (
+            <button
+              className="qo-jump"
+              onClick={() => scrollToBottom(true)}
+              aria-label="Revenir en bas"
+            >
+              Revenir au dernier
+            </button>
+          )}
         </main>
 
         {/* Composer */}
@@ -298,7 +430,10 @@ function HistoryItem({ session, active, onSelect, onRename, onDelete }) {
           </span>
         )}
 
-        <div className="qo-history__actions" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="qo-history__actions"
+          onClick={(e) => e.stopPropagation()}
+        >
           <button
             className="qo-iconbtn subtle"
             aria-label="Renommer"
