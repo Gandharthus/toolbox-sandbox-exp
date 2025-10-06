@@ -1,0 +1,1 @@
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT && df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay --total | awk 'END{printf("Mounted total — Used: %.1fG  Avail: %.1fG  Total: %.1fG\n", $3/1024/1024/1024, $4/1024/1024/1024, $2/1024/1024/1024)}'
