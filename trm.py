@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -228,7 +228,17 @@ class IdsQuery(BaseModel):
 
 
 # -----------------------------------------------------------------------------
-# Recursive bool query (uses annotation-only forward ref "Query")
+# Declare the forward-ref union as a STRING TypeAlias (no runtime union math)
+# -----------------------------------------------------------------------------
+
+Query: TypeAlias = (
+    "MatchQuery | MultiMatchQuery | TermQuery | TermsQuery | "
+    "RangeQuery | ExistsQuery | MatchAllQuery | IdsQuery | BoolQuery"
+)
+
+
+# -----------------------------------------------------------------------------
+# Recursive bool query (uses the forward-ref "Query")
 # -----------------------------------------------------------------------------
 
 class BoolBody(BaseModel):
@@ -243,10 +253,10 @@ class BoolBody(BaseModel):
       - `must_not`: negate (documents MUST NOT match).
       - You can nest `BoolQuery` inside any of these lists.
     """
-    must: list["Query"] | None = Field(None, description="All must match; contributes to score.")
-    filter: list["Query"] | None = Field(None, description="All must match; does NOT affect score.")
-    should: list["Query"] | None = Field(None, description="Optional; affects score unless minimum_should_match is set.")
-    must_not: list["Query"] | None = Field(None, description="Documents must NOT match these.")
+    must: list[Query] | None = Field(None, description="All must match; contributes to score.")
+    filter: list[Query] | None = Field(None, description="All must match; does NOT affect score.")
+    should: list[Query] | None = Field(None, description="Optional; affects score unless minimum_should_match is set.")
+    must_not: list[Query] | None = Field(None, description="Documents must NOT match these.")
     minimum_should_match: int | str | None = Field(
         None, description='Minimum number/percent of `should` clauses that must match, e.g. 1 or "75%".'
     )
@@ -266,10 +276,7 @@ class BoolQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# NOTE: We do NOT define a runtime `Query = A | B | ...` here.
-# We only use "Query" as a forward-referenced name inside annotations above.
-
-# Resolve forward refs now that all classes are defined.
+# Resolve forward refs now that all classes are defined and the alias exists.
 BoolBody.model_rebuild()
 BoolQuery.model_rebuild()
 
@@ -287,13 +294,13 @@ class SearchRequest(BaseModel):
       - Use `size` to limit hits; use `from_` (alias 'from') for pagination.
       - Emit JSON using `model_dump(by_alias=True, exclude_none=True)`.
     """
-    query: "Query" = Field(..., description="A single Query DSL container (match, bool, range, etc.).")
+    query: Query = Field(..., description="A single Query DSL container (match, bool, range, etc.).")
     size: int | None = Field(None, description="Maximum number of hits to return.")
     from_: int | None = Field(default=None, alias="from", description="Offset for pagination (use with `size`).")
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-# SearchRequest also references "Query" as a forward ref — resolve it, too.
+# SearchRequest also references Query; resolve again to be safe.
 SearchRequest.model_rebuild()
 
 
@@ -321,4 +328,5 @@ if __name__ == "__main__":
     )
 
     req = SearchRequest(query=q, size=25, **{"from": 0})
+
     print(req.model_dump(by_alias=True, exclude_none=True))
