@@ -1,0 +1,69 @@
+@startuml
+!define RECTANGLE class
+skinparam rectangle {
+  BackgroundColor<<Service>> LightBlue
+  BackgroundColor<<DataStore>> Wheat
+  BackgroundColor<<Agent>> LightGreen
+  BackgroundColor<<Infra>> LightGray
+  BorderColor Black
+  FontColor Black
+}
+
+actor User as U
+
+rectangle "LLMaaS" <<Service>> as LLM {
+  rectangle "MCP Client" <<Service>> as MCPClient
+}
+
+rectangle "Observability System" {
+  rectangle "MCP Server - ES" <<Service>> as MCP_ES {
+    note right: Tools:\n- search_logs\n- get_index_list\n- get_volumetry_index
+  }
+  rectangle "MCP Server - AI" <<Service>> as MCP_AI {
+    note right: Tools:\n- show_anomalies\n- top_clusters
+  }
+  rectangle "MCP Server - LaaS" <<Service>> as MCP_LaaS {
+    note right: Tools:\n- Tool1\n- Tool2\n- Tool3
+  }
+}
+
+rectangle "ElasticSearch (es01)" <<DataStore>> as ES
+rectangle "AiForLogs" <<DataStore>> as AIF
+rectangle "LaaS Platform" <<DataStore>> as LAAS
+
+rectangle "ObservabilityAgent" <<Agent>> as OA
+rectangle "TWIN" <<Agent>> as Twin
+rectangle "Alerting Platform" <<Service>> as Alert
+rectangle "Other Agents" <<Agent>> as OA2
+
+rectangle "Infra & Mesh" <<Infra>> as INF {
+  rectangle "Kubernetes Cluster" <<Infra>>
+  rectangle "Service Mesh (Istio/Linkerd)" <<Infra>>
+  rectangle "Message Broker (Kafka/RabbitMQ)" <<Infra>>
+  rectangle "Prometheus / Grafana / OTel" <<Infra>>
+}
+
+U --> LLM : Prompt / Query
+LLM --> MCPClient : Interpret & Orchestrate
+MCPClient --> MCP_ES : Log queries
+MCPClient --> MCP_AI : Anomaly/Cluster queries
+MCPClient --> MCP_LaaS : Metadata/Tool requests
+
+MCP_ES --> ES : Query/Index Data
+MCP_AI --> AIF : ML Insights
+MCP_LaaS --> LAAS : Log Metadata
+
+Alert --> OA : Alert Event
+OA --> Twin : Dispatch & Coordination
+Twin --> OA2 : Forward/Sync Data
+OA --> LLM : Send Context/Insights
+
+LLM --> U : Natural Language Insights
+
+' Cross-cutting connections
+MCPClient -[#blue,dashed]-> INF : Observability / Telemetry
+MCP_ES -[#blue,dashed]-> INF
+MCP_AI -[#blue,dashed]-> INF
+OA -[#blue,dashed]-> INF
+LLM -[#blue,dashed]-> INF
+@enduml
