@@ -1,457 +1,491 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
+
+# -------------------------
+# Trigger / Schedule
+# -------------------------
 
 class TriggerHourlySchedule(BaseModel):
     minute: Union[int, List[int]] = Field(
         default=0,
-        description="The minute(s) past each hour when the watch should fire (hourly schedule)."
+        description="Minute(s) past each hour when the watch fires (0–59). If omitted, defaults to 0."
     )
 
 
-class TriggerDailyScheduleAtTime(BaseModel):
+class TriggerDailyAtHM(BaseModel):
     hour: Union[int, List[int]] = Field(
-        description="Hour(s) of day (0-23) when schedule fires for daily schedule."
+        description="Hour(s) of day (0–23) when the watch fires."
     )
     minute: Union[int, List[int]] = Field(
-        description="Minute(s) of each specified hour for daily schedule."
+        description="Minute(s) for each specified hour (0–59)."
     )
 
 
 class TriggerDailySchedule(BaseModel):
-    at: Optional[Union[str, TriggerDailyScheduleAtTime, List[Union[str, TriggerDailyScheduleAtTime]]]] = Field(
+    at: Optional[Union[str, TriggerDailyAtHM, List[Union[str, TriggerDailyAtHM]]]] = Field(
         default="midnight",
-        description=(
-            "Time(s) when the watch should fire each day (daily schedule). "
-            "Can be a string like '17:00', a structure {hour, minute}, or list of such."
-        )
+        description="Time(s) each day. String like '17:00', a {hour,minute} object, or a list of those."
     )
 
 
-class TriggerMonthlyScheduleAtTime(BaseModel):
+class TriggerMonthlyAtHM(BaseModel):
     hour: Union[int, List[int]] = Field(
-        description="Hour(s) of day when schedule runs for monthly schedule."
+        description="Hour(s) of day (0–23) for monthly schedule."
     )
     minute: Union[int, List[int]] = Field(
-        description="Minute(s) of hour when schedule runs for monthly schedule."
+        description="Minute(s) for each specified hour (0–59)."
     )
 
 
 class TriggerMonthlySchedule(BaseModel):
     on: Union[int, List[int]] = Field(
-        description="Day(s) of the month (1-31) when the watch should fire for monthly schedule."
+        description="Day(s) of the month (1–31) when the watch fires."
     )
-    at: Optional[Union[str, TriggerMonthlyScheduleAtTime, List[Union[str, TriggerMonthlyScheduleAtTime]]]] = Field(
+    at: Optional[Union[str, TriggerMonthlyAtHM, List[Union[str, TriggerMonthlyAtHM]]]] = Field(
         default="midnight",
-        description=(
-            "Time(s) on the specified day(s) when the watch should fire (monthly schedule). "
-            "Same format as daily schedule 'at'."
-        )
+        description="Time(s) on the specified day(s). Same formats as daily 'at'."
     )
 
 
 class TriggerSchedule(BaseModel):
     interval: Optional[str] = Field(
         default=None,
-        description="Fixed interval for schedule (e.g., '5m', '1h', '2d')."
+        description="Fixed interval (e.g., '5m', '1h', '2d')."
     )
     cron: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="Cron expression(s) for schedule execution."
+        description="Cron expression(s) controlling execution."
     )
     hourly: Optional[TriggerHourlySchedule] = Field(
         default=None,
-        description="Hourly schedule settings."
+        description="Hourly schedule."
     )
     daily: Optional[TriggerDailySchedule] = Field(
         default=None,
-        description="Daily schedule settings."
+        description="Daily schedule."
     )
     monthly: Optional[Union[TriggerMonthlySchedule, List[TriggerMonthlySchedule]]] = Field(
         default=None,
-        description="Monthly schedule settings (single or list)."
+        description="Monthly schedule (single or list)."
     )
     timezone: Optional[str] = Field(
         default=None,
-        description="Time‐zone identifier (e.g., 'UTC', 'Europe/Paris') for schedule."
+        description="IANA timezone (e.g., 'UTC', 'Europe/Paris')."
     )
 
-    @field_validator('*', mode='before')
-    def check_one_schedule_type(cls, v, values, field):
-        # ensure only one of interval/cron/hourly/daily/monthly is used
-        if v is not None:
-            other_keys = {k for k in values if values.get(k) is not None and k != field.name}
-            if other_keys:
-                raise ValueError(f"Multiple schedule types provided: {field.name} plus {other_keys}")
-        return v
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _only_one_schedule_kind(self) -> "TriggerSchedule":
+        kinds = [k for k in ("interval", "cron", "hourly", "daily", "monthly")
+                 if getattr(self, k) not in (None, [], "")]
+        if len(kinds) != 1:
+            raise ValueError(f"Exactly one schedule type must be set (got: {kinds or 'none'}).")
+        return self
 
 
 class Trigger(BaseModel):
     schedule: TriggerSchedule = Field(
-        description="Trigger definition controlling when the watch executes."
+        description="Trigger schedule definition (exactly one of interval/cron/hourly/daily/monthly)."
     )
 
+    model_config = ConfigDict(extra="forbid")
+
+
+# -------------------------
+# Inputs
+# -------------------------
 
 class SearchInputRequest(BaseModel):
     indices: Optional[List[str]] = Field(
         default=None,
-        description="List of index names to search."
+        description="Indices/aliases to search."
     )
     indices_options: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Advanced index options (e.g., allow_no_indices, ignore_unavailable)."
+        description="Advanced index selection options (allow_no_indices, ignore_unavailable, etc.)."
     )
     search_type: Optional[str] = Field(
         default=None,
-        description="The search type (e.g., 'query_then_fetch')."
+        description="Search type (rarely needed in ES 8; usually omit)."
     )
     body: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="The Elasticsearch search DSL body."
+        description="Request body using the Elasticsearch Query DSL."
     )
     timeout: Optional[str] = Field(
         default=None,
-        description="Timeout for the search request (e.g., '30s')."
+        description="Search timeout (e.g., '30s')."
     )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SearchInput(BaseModel):
     request: SearchInputRequest = Field(
-        description="Definition of the actual search request."
+        description="Search request to load data into the watch context."
     )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class HttpInputRequest(BaseModel):
-    scheme: Optional[str] = Field(
+    scheme: Optional[Literal["http", "https"]] = Field(
         default="https",
-        description="HTTP scheme to use for request (http or https)."
+        description="HTTP scheme for the request."
     )
     host: Optional[str] = Field(
         default=None,
-        description="Host for HTTP request."
+        description="Target host."
     )
     port: Optional[int] = Field(
         default=None,
-        description="Port for HTTP request."
+        description="Target port."
     )
     path: Optional[str] = Field(
         default=None,
-        description="URL path of the HTTP request."
+        description="Request path (e.g., '/api/v1/health')."
     )
     params: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Query parameters for HTTP request."
+        description="Query string parameters."
     )
     headers: Optional[Dict[str, str]] = Field(
         default=None,
-        description="HTTP headers to send."
+        description="HTTP headers."
     )
     body: Optional[Union[str, Dict[str, Any]]] = Field(
         default=None,
-        description="Body payload for HTTP request."
+        description="Request body (string or JSON object)."
     )
+
+    model_config = ConfigDict(extra="allow")  # allow future attributes (auth, timeouts, etc.)
 
 
 class HttpInput(BaseModel):
     request: HttpInputRequest = Field(
-        description="HTTP input request definition."
+        description="HTTP request spec; response is loaded into the watch context."
     )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SimpleInput(BaseModel):
+    data: Dict[str, Any] = Field(
+        description="Static payload loaded into the watch context."
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChainInputLink(BaseModel):
+    simple: Optional[SimpleInput] = None
+    search: Optional[SearchInput] = None
+    http: Optional[HttpInput] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _only_one_chain_input(self) -> "ChainInputLink":
+        kinds = [k for k in ("simple", "search", "http") if getattr(self, k) is not None]
+        if len(kinds) != 1:
+            raise ValueError(f"Each chain link must specify exactly one input type (got: {kinds or 'none'}).")
+        return self
+
+
+class ChainInput(BaseModel):
+    inputs: List[ChainInputLink] = Field(
+        description="Sequence of inputs whose payloads are merged into the execution context."
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Input(BaseModel):
-    search: Optional[SearchInput] = Field(
-        default=None,
-        description="Search‐type input that queries Elasticsearch indices."
-    )
-    http: Optional[HttpInput] = Field(
-        default=None,
-        description="HTTP input that invokes an external endpoint."
-    )
-    # You may add chain/script/none etc if needed.
+    simple: Optional[SimpleInput] = Field(default=None, description="Static data input.")
+    search: Optional[SearchInput] = Field(default=None, description="Elasticsearch search input.")
+    http: Optional[HttpInput] = Field(default=None, description="HTTP input.")
+    chain: Optional[ChainInput] = Field(default=None, description="Chain of inputs executed in order.")
 
-    @field_validator('*', mode='before')
-    def check_one_input_type(cls, v, values, field):
-        if v is not None:
-            other_keys = {k for k in values if values.get(k) is not None and k != field.name}
-            if other_keys:
-                raise ValueError(f"Multiple input types specified: {field.name} plus {other_keys}")
-        return v
+    model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="after")
+    def _only_one_top_input(self) -> "Input":
+        kinds = [k for k in ("simple", "search", "http", "chain") if getattr(self, k) is not None]
+        if len(kinds) > 1:
+            raise ValueError(f"Watch input must define exactly one top-level input (got: {kinds}).")
+        return self
+
+
+# -------------------------
+# Conditions
+# -------------------------
 
 class CompareCondition(BaseModel):
+    # Example: {"ctx.payload.hits.total.value": {"gt": 5}}
     __root__: Dict[str, Dict[str, Any]] = Field(
-        description=(
-            "Structure mapping context‐variable path to comparison details, e.g. "
-            `{"ctx.payload.hits.total": {"gt": 5}}`
-        )
+        description="Map of ctx path to operator/value (gt/gte/lt/lte/eq/ne)."
     )
 
 
 class ScriptCondition(BaseModel):
-    lang: Optional[str] = Field(
-        default="painless",
-        description="Script language, defaults to painless."
-    )
-    source: str = Field(
-        description="Script source code to execute for condition."
-    )
-    params: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Parameters to the script."
-    )
+    lang: Optional[str] = Field(default="painless", description="Script language. Defaults to painless.")
+    source: str = Field(description="Script source returning truthy/falsey.")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="Script params.")
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ArrayCompareCondition(BaseModel):
-    path: str = Field(
-        description="Path in payload to array to evaluate."
+    path: str = Field(description="Payload path to array to evaluate.")
+    # Any of these numeric bounds may be used (ES evaluates semantics server-side)
+    gte: Optional[int] = Field(default=None, description="Greater-or-equal threshold.")
+    gt: Optional[int] = Field(default=None, description="Greater-than threshold.")
+    lte: Optional[int] = Field(default=None, description="Less-or-equal threshold.")
+    lt: Optional[int] = Field(default=None, description="Less-than threshold.")
+    value: Optional[Any] = Field(default=None, description="Optional value to compare array elements to.")
+    path_to_elements: Optional[str] = Field(
+        default=None,
+        description="Optional path inside each array element to compare (per docs)."
     )
-    gte: Optional[int] = Field(default=None, description="Greater or equal threshold.")
-    gt: Optional[int] = Field(default=None, description="Greater than threshold.")
-    lte: Optional[int] = Field(default=None, description="Less or equal threshold.")
-    lt: Optional[int] = Field(default=None, description="Less than threshold.")
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Condition(BaseModel):
-    always: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="An always‐true condition (no check)."
-    )
-    never: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="An always‐false condition (never fire)."
-    )
-    compare: Optional[CompareCondition] = Field(
-        default=None,
-        description="Compare condition type."
-    )
-    script: Optional[ScriptCondition] = Field(
-        default=None,
-        description="Script condition type."
-    )
-    array_compare: Optional[ArrayCompareCondition] = Field(
-        default=None,
-        description="Array compare condition for arrays in payload."
-    )
+    always: Optional[Dict[str, Any]] = Field(default=None, description="Always-true condition.")
+    never: Optional[Dict[str, Any]] = Field(default=None, description="Always-false condition.")
+    compare: Optional[CompareCondition] = Field(default=None, description="Compare condition.")
+    script: Optional[ScriptCondition] = Field(default=None, description="Scripted condition.")
+    array_compare: Optional[ArrayCompareCondition] = Field(default=None, description="Array compare condition.")
 
-    @field_validator('*', mode='before')
-    def check_one_condition_type(cls, v, values, field):
-        if v is not None:
-            other_keys = {k for k, val in values.items() if val is not None and k != field.name}
-            if other_keys:
-                raise ValueError(f"Multiple condition types specified: {field.name} plus {other_keys}")
-        return v
+    model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="after")
+    def _only_one_condition(self) -> "Condition":
+        kinds = [k for k in ("always", "never", "compare", "script", "array_compare")
+                 if getattr(self, k) is not None]
+        if len(kinds) > 1:
+            raise ValueError(f"Exactly one condition type must be set (got: {kinds}).")
+        return self
+
+
+# -------------------------
+# Transforms
+# -------------------------
 
 class ScriptTransform(BaseModel):
-    lang: Optional[str] = Field(
-        default="painless",
-        description="Script language for transform."
-    )
-    source: str = Field(
-        description="Script source code for transform."
-    )
-    params: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Parameters to the script."
-    )
+    lang: Optional[str] = Field(default="painless", description="Script language.")
+    source: str = Field(description="Transform script source.")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="Script params.")
+
+    model_config = ConfigDict(extra="forbid")
 
 
-class IndexTransform(BaseModel):
-    index: str = Field(
-        description="Target index where transformed documents will be written."
-    )
-    doc_id: Optional[str] = Field(
-        default=None,
-        description="Document ID to use when indexing (optional)."
-    )
-    refresh: Optional[str] = Field(
-        default=None,
-        description="Refresh policy (true, false, wait_for)."
-    )
-    op_type: Optional[str] = Field(
-        default=None,
-        description="Operation type (index or create)."
-    )
+class TransformChainStep(BaseModel):
+    # Watcher supports script/search transforms (others are uncommon)
+    script: Optional[ScriptTransform] = Field(default=None, description="Script transform step.")
+    search: Optional[SearchInput] = Field(default=None, description="Search transform step.")
 
+    model_config = ConfigDict(extra="forbid")
 
-class TransformChainElement(BaseModel):
-    script: Optional[ScriptTransform] = Field(
-        default=None,
-        description="Script transform step."
-    )
-    search: Optional[SearchInput] = Field(
-        default=None,
-        description="Search transform step."
-    )
-    index: Optional[IndexTransform] = Field(
-        default=None,
-        description="Index transform step."
-
-    )
-
-    @field_validator('*', mode='before')
-    def only_one_transform_type(cls, v, values, field):
-        if v is not None:
-            other_keys = {k for k, val in values.items() if val is not None and k != field.name}
-            if other_keys:
-                raise ValueError(f"Only one transform type allowed per chain element: {field.name} plus {other_keys}")
-        return v
+    @model_validator(mode="after")
+    def _only_one_transform_step(self) -> "TransformChainStep":
+        kinds = [k for k in ("script", "search") if getattr(self, k) is not None]
+        if len(kinds) != 1:
+            raise ValueError(f"Each transform step must specify exactly one transform (got: {kinds or 'none'}).")
+        return self
 
 
 class Transform(BaseModel):
-    chain: Optional[List[TransformChainElement]] = Field(
-        default=None,
-        description="List of transform steps executed in order."
+    chain: Optional[List[TransformChainStep]] = Field(default=None, description="Ordered transform steps.")
+    script: Optional[ScriptTransform] = Field(default=None, description="Single script transform.")
+    search: Optional[SearchInput] = Field(default=None, description="Single search transform.")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _only_one_transform_top(self) -> "Transform":
+        kinds = [k for k in ("chain", "script", "search") if getattr(self, k) is not None]
+        if len(kinds) > 1:
+            raise ValueError(f"Exactly one top-level transform must be set (got: {kinds}).")
+        return self
+
+
+# -------------------------
+# Actions
+# -------------------------
+
+LogLevel = Literal["trace", "debug", "info", "warn", "error"]
+
+class LoggingActionConfig(BaseModel):
+    text: str = Field(description="Log message (supports Mustache templates).")
+    level: Optional[LogLevel] = Field(default="info", description="Log level (default: info).")
+    category: Optional[str] = Field(default=None, description="Optional logger category/name.")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class IndexActionConfig(BaseModel):
+    index: str = Field(description="Target index for the document.")
+    doc_id: Optional[str] = Field(default=None, description="Optional document ID.")
+    refresh: Optional[Literal["true", "false", "wait_for"]] = Field(
+        default=None, description="Refresh policy."
     )
-    script: Optional[ScriptTransform] = Field(
-        default=None,
-        description="Single script transform."
+    op_type: Optional[Literal["index", "create"]] = Field(
+        default=None, description="Operation type."
     )
-    search: Optional[SearchInput] = Field(
-        default=None,
-        description="Single search transform." 
+    doc: Optional[Dict[str, Any]] = Field(
+        default=None, description="Document to index (if not provided via transform/payload)."
     )
 
-    @field_validator('*', mode='before')
-    def only_one_transform_top_type(cls, v, values, field):
-        if v is not None:
-            other_keys = {k for k, val in values.items() if val is not None and k != field.name}
-            if other_keys:
-                raise ValueError(f"Only one transform type allowed: {field.name} plus {other_keys}")
+    model_config = ConfigDict(extra="forbid")
+
+
+class HttpMethod(str):
+    """Lightweight literal-esque type that tolerates future methods"""
+    def __new__(cls, value: str) -> "HttpMethod":
+        v = str.__new__(cls, value.upper())
+        if v not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+            raise ValueError("Unsupported HTTP method for webhook action.")
         return v
+
+
+class WebhookActionConfig(BaseModel):
+    scheme: Optional[Literal["http", "https"]] = Field(default="https", description="HTTP scheme.")
+    host: str = Field(description="Remote host.")
+    port: Optional[int] = Field(default=None, description="Remote port.")
+    method: Optional[HttpMethod] = Field(default=None, description="HTTP method (default per body presence).")
+    path: Optional[str] = Field(default=None, description="Request path.")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="Query parameters.")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="HTTP headers.")
+    body: Optional[Union[str, Dict[str, Any]]] = Field(default=None, description="Request body.")
+
+    model_config = ConfigDict(extra="allow")  # allow auth, timeouts, etc.
+
+
+class EmailBody(BaseModel):
+    text: Optional[str] = Field(default=None, description="Plain-text body.")
+    html: Optional[str] = Field(default=None, description="HTML body.")
+
+    @model_validator(mode="after")
+    def _one_of_text_or_html(self) -> "EmailBody":
+        if not (self.text or self.html):
+            raise ValueError("Email body must include 'text' and/or 'html'.")
+        return self
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailActionConfig(BaseModel):
+    to: Union[str, List[str]] = Field(description="Recipient(s).")
+    cc: Optional[Union[str, List[str]]] = Field(default=None, description="CC recipient(s).")
+    bcc: Optional[Union[str, List[str]]] = Field(default=None, description="BCC recipient(s).")
+    subject: str = Field(description="Email subject.")
+    body: EmailBody = Field(description="Email body (text and/or HTML).")
+    priority: Optional[Literal["low", "normal", "high"]] = Field(
+        default=None, description="Email priority."
+    )
+    attachments: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Attachments configuration (e.g., reports)."
+    )
+
+    model_config = ConfigDict(extra="allow")  # allow provider-specific fields
 
 
 class ActionBase(BaseModel):
     throttle_period: Optional[str] = Field(
-        default=None,
-        description="Minimum period between action executions (e.g., '10m')."
+        default=None, description="Minimum period between executions (e.g., '10m')."
     )
     throttle_period_in_millis: Optional[int] = Field(
-        default=None,
-        description="Minimum period in milliseconds between action executions."
+        default=None, description="Minimum period in milliseconds between executions."
     )
     condition: Optional[Condition] = Field(
-        default=None,
-        description="Condition to apply before running this action."
+        default=None, description="Optional action-level condition."
     )
     foreach: Optional[str] = Field(
-        default=None,
-        description="Context variable path to iterate over for multi‐action execution."
+        default=None, description="Context path to iterate over for repeated action execution."
     )
     max_iterations: Optional[int] = Field(
-        default=None,
-        description="Maximum number of iterations for foreach processing."
+        default=None, description="Max iterations when using 'foreach'."
     )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class LoggingAction(ActionBase):
-    logging: Dict[str, Any] = Field(
-        description="Logging action configuration (e.g., text, level, category).")
+    logging: LoggingActionConfig = Field(description="Logging action configuration.")
 
 
 class IndexAction(ActionBase):
-    index: Dict[str, Any] = Field(
-        description="Index action configuration (index target, doc_id, op_type, refresh).")
+    index: IndexActionConfig = Field(description="Index action configuration.")
 
 
 class WebhookAction(ActionBase):
-    webhook: Dict[str, Any] = Field(
-        description="Webhook action configuration (method, host, path, headers, body).")
+    webhook: WebhookActionConfig = Field(description="Webhook action configuration.")
 
 
 class EmailAction(ActionBase):
-    email: Dict[str, Any] = Field(
-        description="Email action configuration (to, subject, body, attachments).")
+    email: EmailActionConfig = Field(description="Email action configuration.")
 
 
-class PagerDutyAction(ActionBase):
-    pagerduty: Dict[str, Any] = Field(
-        description="PagerDuty action configuration (account, service_key, incident_key).")
-
-
-class SlackAction(ActionBase):
-    slack: Dict[str, Any] = Field(
-        description="Slack action configuration (account, message, attachments).")
-
-
-Action = Union[
-    LoggingAction,
-    IndexAction,
-    WebhookAction,
-    EmailAction,
-    PagerDutyAction,
-    SlackAction,
-]
+Action = Union[LoggingAction, IndexAction, WebhookAction, EmailAction]
 
 
 class Actions(BaseModel):
     __root__: Dict[str, Action] = Field(
-        description="Map of action names to their configurations.")
+        description="Map of action names to their configurations."
+    )
 
+    model_config = ConfigDict(extra="forbid")
+
+
+# -------------------------
+# Top-level Watch
+# -------------------------
 
 class WatcherWatch(BaseModel):
-    trigger: Trigger = Field(
-        description="Trigger schedule for the watch.")
-    input: Optional[Input] = Field(
-        default=None,
-        description="Input definition that loads data into watch context.")
+    """
+    Elasticsearch Watcher watch definition (Elasticsearch 8.x).
+    Includes trigger, input, condition, optional transform, and actions.
+    """
+    trigger: Trigger = Field(description="Trigger schedule controlling when the watch executes.")
+    input: Optional[Input] = Field(default=None, description="Input that populates the execution context.")
     condition: Optional[Condition] = Field(
         default=None,
-        description="Condition evaluated on input payload to decide if actions run.")
+        description="Condition to decide whether actions run. If omitted, defaults to 'always'."
+    )
     transform: Optional[Transform] = Field(
         default=None,
-        description="Optional transform applied to payload before actions.")
-    actions: Actions = Field(
-        description="Definition of actions to take when condition is met.")
+        description="Optional transform to modify the payload before actions."
+    )
+    actions: Actions = Field(description="Actions to execute when the condition is met.")
     metadata: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Arbitrary metadata for the watch (can include name, description, tags).")
+        default=None, description="Arbitrary metadata (name, description, tags, owner, etc.)."
+    )
     version: Optional[int] = Field(
-        default=None,
-        description="Version number for concurrency control when updating watch.")
+        default=None, description="Version for concurrency control when updating a watch."
+    )
     active: Optional[bool] = Field(
-        default=None,
-        description="Whether the watch is enabled (true) or disabled (false).")
+        default=None, description="Whether the watch is enabled."
+    )
     throttle_period: Optional[str] = Field(
-        default=None,
-        description="Default throttle period for all actions in this watch (e.g., '1h').")
+        default=None, description="Default throttle period for all actions (overridden per-action if set)."
+    )
     throttle_period_in_millis: Optional[int] = Field(
-        default=None,
-        description="Default throttle period in milliseconds for all actions in this watch.")
+        default=None, description="Default throttle period for all actions, in milliseconds."
+    )
 
-    class Config:
-        extra = "allow"
-        schema_extra = {
-            "example": {
-                "trigger": {
-                    "schedule": {
-                        "daily": {
-                            "at": "17:00"
-                        },
-                        "timezone": "Europe/Paris"
-                    }
-                },
-                "input": {
-                    "search": {
-                        "request": {
-                            "indices": ["logs-*"],
-                            "body": {
-                                "query": {"match": {"level": "ERROR"}}
-                            }
-                        }
-                    }
-                },
-                "condition": {
-                    "compare": {"ctx.payload.hits.total": {"gt": 0}}
-                },
-                "actions": {
-                    "alert_team": {
-                        "logging": {"text": "Found errors: {{ctx.payload.hits.total}}", "level": "warn"}
-                    }
-                },
-                "metadata": {"watch_name": "error_watch", "team": "observability"},
-                "version": 1,
-                "active": True
-            }
-        }
+    # allow future fields from ES without breaking deserialization
+    model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def _require_actions(self) -> "WatcherWatch":
+        if not self.actions or not self.actions.__root__:
+            # ES allows a watch with no actions but it’s rarely useful; keep, but warn by validation?
+            # We’ll allow but keep the model permissive.
+            pass
+        return self
